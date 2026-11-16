@@ -48,6 +48,9 @@ cp config.example.yaml config.yaml   # 改 server.name 和 public_url
 
 客户端里把 homeserver 填 `http://127.0.0.1:8008`（或你的 https 域名）即可登录。
 
+> 不想自己编译：[安装与部署](docs/INSTALL.md) 里列了 Release 预编译二进制、
+> Docker 镜像、Compose、本地构建等方式，以及 systemd 常驻配置。
+
 ### 配置文件从哪读
 
 `config.yaml` 就是**服务端根目录**（`yhmatrix` 可执行文件所在目录）里的那一份，
@@ -1527,13 +1530,27 @@ matrix.example.com {
 所以**没有反向代理就不要填**。现在启动时会检查：`public_url` 的主机和 `server.name`
 不一致就打 WARN，如果还是 `example.com` 那种占位值会直接点名。
 
-Docker：
+Docker（完整的多方式安装说明见 [docs/INSTALL.md](docs/INSTALL.md)）：
 
 ```bash
-docker build -t yhmatrix .
-docker run -d --name yhmatrix -p 8008:8008 \
-  -v $PWD/config.yaml:/app/config.yaml -v $PWD/data:/app/data yhmatrix
+# ① 直接拉预构建镜像（最省事，tag 发布时由 workflow 自动构建）
+docker run -d --name yhmatrix --restart unless-stopped -p 8008:8008 \
+  -e YHMATRIX_SERVER_NAME=192.168.1.12 \
+  -v yhmatrix-data:/app/data \
+  ghcr.io/kauid323/yunhuuser2matrix:latest
+
+# ② 用仓库根目录下的 compose.yaml
+docker compose up -d
+
+# ③ 从源码本地构建
+docker build -t yhmatrix:local .
 ```
+
+镜像里的二进制放在 `/app`（和 `config.yaml`、`data/` 同级），因为相对路径一律相对可执行文件目录解析；
+容器以 UID 10001 运行，用 `-v $PWD/data:/app/data` 绑定挂载时要先 `chown 10001:10001 data`。
+配置项全部可用 `YHMATRIX_*` 环境变量覆盖（例如 `YHMATRIX_SERVER_NAME`），
+不挂 `config.yaml` 时首次启动会从 `config.example.yaml` 生成一份到 `/app/config.yaml`。
+不跑容器也可以直接下载 Release 里的各平台二进制。
 
 数据都在 `data/` 下：`accounts/*.json`（账号、设备、房间、事件）、`media/`（上传）、
 `cache/`（代理缓存）。备份这个目录即可。

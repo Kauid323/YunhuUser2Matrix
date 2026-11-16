@@ -1,0 +1,129 @@
+# 发布流程：打一个 v* tag 即自动编译各平台可执行文件并创建 GitHub Release。
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# 也可以手动补发（Actions -> Release -> Run workflow），填入已存在的 tag 名。
+# 首次使用请到 Settings -> Actions -> General 把 Workflow permissions 设为 Read and write。
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要补发的版本 tag（必须已存在，例如 v1.0.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+  REF: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  test:
+    name: go test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux_amd64,   goos: linux,   goarch: amd64, goarm: "",  ext: "",    archive: tar.gz }
+          - { name: linux_arm64,   goos: linux,   goarch: arm64, goarm: "",  ext: "",    archive: tar.gz }
+          - { name: linux_armv7,   goos: linux,   goarch: arm,   goarm: "7", ext: "",    archive: tar.gz }
+          - { name: darwin_amd64,  goos: darwin,  goarch: amd64, goarm: "",  ext: "",    archive: tar.gz }
+          - { name: darwin_arm64,  goos: darwin,  goarch: arm64, goarm: "",  ext: "",    archive: tar.gz }
+          - { name: windows_amd64, goos: windows, goarch: amd64, goarm: "",  ext: ".exe", archive: zip }
+          - { name: windows_arm64, goos: windows, goarch: arm64, goarm: "",  ext: ".exe", archive: zip }
+          - { name: freebsd_amd64, goos: freebsd, goarch: amd64, goarm: "",  ext: "",    archive: tar.gz }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build and package
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          EXT: ${{ matrix.ext }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          PKG="yhmatrix_${VERSION}_${{ matrix.name }}"
+          STAGE="dist/${PKG}"
+          mkdir -p "$STAGE"
+
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+            -o "${STAGE}/yhmatrix${EXT}" ./cmd/yhmatrix
+          go build -trimpath -ldflags "-s -w" \
+            -o "${STAGE}/yhprobe${EXT}" ./cmd/yhprobe
+          cp config.example.yaml README.md LICENSE "$STAGE/"
+
+          if [ "$ARCHIVE" = "zip" ]; then
+            (cd dist && zip -q -r "${PKG}.zip" "${PKG}")
+          else
+            tar -czf "dist/${PKG}.tar.gz" -C dist "${PKG}"
+          fi
+          (cd dist && sha256sum "${PKG}.${ARCHIVE}" > "${PKG}.${ARCHIVE}.sha256")
+          rm -rf "$STAGE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yhmatrix_${{ env.VERSION }}_${{ matrix.name }}
+          path: dist/yhmatrix_*.*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) \
+            -printf '%f\n' | sort | xargs sha256sum | tee SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: yhmatrix ${{ env.VERSION }}
+          generate_release_notes: true
+          draft: false
+          files: |
+            dist/yhmatrix_*.tar.gz
+            dist/yhmatrix_*.zip
+            dist/yhmatrix_*.sha256
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true

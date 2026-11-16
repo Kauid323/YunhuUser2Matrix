@@ -1,0 +1,39 @@
+# Docker Compose 部署（推荐）
+#   docker compose up -d
+#   docker compose logs -f
+#
+# 想用仓库里的 Dockerfile 本地构建：把 image 那行注释掉，取消 build 的注释。
+services:
+  yhmatrix:
+    image: ghcr.io/kauid323/yunhuuser2matrix:latest
+    # build: .
+    container_name: yhmatrix
+    restart: unless-stopped
+    ports:
+      - "8008:8008"
+    environment:
+      # 必须和客户端访问的域名一致；局域网自用可填 IP 或 localhost
+      YHMATRIX_SERVER_NAME: "localhost"
+      # 只有走反向代理且域名与上面不一致时才需要填，否则保持注释
+      # YHMATRIX_SERVER_PUBLIC_URL: "https://matrix.example.com"
+      YHMATRIX_LOG_LEVEL: "info"
+      # YHMATRIX_SERVER_BIND: ":8008"
+      # 注：allow_relogin / allow_register 没有 env 覆盖，需要改请挂载 config.yaml。
+      # 暴露到公网时务必把 allow_relogin 改成 false。
+    volumes:
+      - yhmatrix-data:/app/data
+      # 可选：完整自定义配置（会覆盖镜像里自动生成的 config.yaml）
+      # - ./config.yaml:/app/config.yaml:ro
+      # 可选：同源托管 Element Web，配合 -web ./element-web 或环境变量
+      # - ./element-web:/app/element-web:ro
+      # 若改用绑定挂载 ./data:/app/data，先执行：
+      #   mkdir -p data && sudo chown 10001:10001 data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8008/_matrix/client/versions"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  yhmatrix-data:

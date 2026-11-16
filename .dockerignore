@@ -1,0 +1,17 @@
+.git
+.github
+.gitignore
+*.md
+docs/
+data/
+tmp/
+bin/
+element-web/
+certs/
+config.yaml
+*.exe
+*.test
+*.out
+Dockerfile
+compose.yaml
+.dockerignore

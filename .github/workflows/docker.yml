@@ -1,0 +1,72 @@
+# 与 release.yml 配套：同一个 v* tag 触发，构建多架构镜像推送到 GHCR。
+# 镜像地址：ghcr.io/<owner>/<repo>:latest（与 :vX.Y.Z、:X.Y.Z、:X.Y 同时发布）
+#
+# 首次使用请到 Settings -> Actions -> General 把 Workflow permissions 设为 Read and write；
+# 推送成功后若镜像默认私有，可在仓库 Packages 页面把它改成 Public，别人才能直接 pull。
+
+name: Docker Image
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要构建的版本 tag（必须已存在，例如 v1.0.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+  REF: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: build and push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+      # GHCR 不允许大写，github.repository 里的 Owner/Repo 需要转小写。
+      - name: Lowercase image name
+        id: image
+        run: |
+          echo "name=ghcr.io/$(printf '%s' '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
